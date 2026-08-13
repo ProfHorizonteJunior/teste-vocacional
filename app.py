@@ -42,7 +42,7 @@ if not api_key:
     st.warning("Por favor, defina a variável GEMINI_API_KEY no arquivo .env")
     st.stop()
 
-MODELO = "gemini-flash-latest"
+MODELO = "gemini-3.1-flash-lite"
 
 # Salva o cliente na sessão para não perder a conexão (Evita o erro "client has been closed")
 if "client" not in st.session_state:
