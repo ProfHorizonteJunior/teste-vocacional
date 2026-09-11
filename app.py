@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time # <--- IMPORTANTE: Importamos a biblioteca de tempo
 import streamlit as st
 from dotenv import load_dotenv
 from google import genai
@@ -32,12 +33,22 @@ ARQUIVO_ESTATISTICAS = "estatisticas.json"
 
 def carregar_estatisticas():
     if os.path.exists(ARQUIVO_ESTATISTICAS):
-        with open(ARQUIVO_ESTATISTICAS, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(ARQUIVO_ESTATISTICAS, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            # Proteção: Se houver colisão de leitura/escrita simultânea, retorna vazio temporariamente
+            pass
     return {"total_testes": 0, "profissoes": {}}
 
 def salvar_resultado(profissoes_recomendadas):
     dados = carregar_estatisticas()
+    
+    # Se retornou vazio pela proteção acima, mas o arquivo existe, tenta de novo
+    if dados["total_testes"] == 0 and os.path.exists(ARQUIVO_ESTATISTICAS):
+        time.sleep(0.1)
+        dados = carregar_estatisticas()
+
     dados["total_testes"] += 1
     
     for prof in profissoes_recomendadas:
@@ -67,10 +78,9 @@ if "pergunta_atual" not in st.session_state:
     st.session_state.pergunta_atual = 0
 
 if "historico_qa" not in st.session_state:
-    st.session_state.historico_qa = [] # Armazena os pares de Pergunta/Resposta
+    st.session_state.historico_qa = [] 
 
 if "messages" not in st.session_state:
-    # Mensagem 0 com a saudação e a primeira pergunta
     msg_boas_vindas = f"Seja bem vindo, vamos iniciar o seu teste? \n\n**1.** {PERGUNTAS[0]}"
     st.session_state.messages = [{"role": "assistant", "content": msg_boas_vindas}]
 
@@ -92,30 +102,24 @@ rota = st.sidebar.radio("Ir para:", ["📝 Teste Vocacional", "📊 Ranking de P
 if rota == "📝 Teste Vocacional":
     st.title("🎓 Descubra sua Profissão Ideal")
     
-    # Exibe o histórico de mensagens da tela
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # --- FLUXO DE PERGUNTAS ---
     if not st.session_state.teste_finalizado:
         if user_input := st.chat_input("Digite sua resposta..."):
             
-            # 1. Mostra e salva a resposta do usuário
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
                 
-            # 2. Registra o par Pergunta/Resposta para enviar à IA depois
             st.session_state.historico_qa.append({
                 "pergunta": PERGUNTAS[st.session_state.pergunta_atual],
                 "resposta": user_input
             })
             
-            # 3. Avança para a próxima pergunta
             st.session_state.pergunta_atual += 1
             
-            # Se ainda houver perguntas, faz a próxima
             if st.session_state.pergunta_atual < len(PERGUNTAS):
                 prox_pergunta = PERGUNTAS[st.session_state.pergunta_atual]
                 txt_prox = f"**{st.session_state.pergunta_atual + 1}.** {prox_pergunta}"
@@ -125,17 +129,14 @@ if rota == "📝 Teste Vocacional":
                     st.markdown(txt_prox)
                 st.rerun()
                 
-            # Se as perguntas acabaram, encerra o teste e chama a IA
             else:
                 st.session_state.teste_finalizado = True
                 st.rerun()
 
-    # --- GERAÇÃO DO DIAGNÓSTICO (APENAS QUANDO FINALIZADO E AINDA SEM RESULTADO) ---
     if st.session_state.teste_finalizado and st.session_state.resultado_atual is None:
         with st.chat_message("assistant"):
             with st.spinner("Analisando suas respostas para diagnosticar o seu perfil..."):
                 
-                # Prepara o histórico para o prompt
                 texto_entrevista = ""
                 for qa in st.session_state.historico_qa:
                     texto_entrevista += f"Pergunta: {qa['pergunta']}\nResposta do Aluno: {qa['resposta']}\n\n"
@@ -155,17 +156,14 @@ Obrigatório: Retorne EXATAMENTE um objeto JSON válido, sem formatação markdo
 }}
 """
                 try:
-                    # Envia a requisição única para o Gemini
                     response = st.session_state.client.models.generate_content(
                         model=MODELO,
                         contents=prompt_diagnostico
                     )
                     
-                    # Limpa a resposta e converte para JSON
                     resposta_limpa = re.sub(r'```(?:json)?', '', response.text).strip()
                     resultado_json = json.loads(resposta_limpa)
                     
-                    # Salva nas estatísticas as 5 profissões recomendadas
                     if "profissoes" in resultado_json:
                         salvar_resultado(resultado_json["profissoes"])
                         
@@ -174,13 +172,11 @@ Obrigatório: Retorne EXATAMENTE um objeto JSON válido, sem formatação markdo
                 except Exception as e:
                     st.error(f"Erro ao processar o diagnóstico: {e}")
 
-    # --- EXIBIÇÃO DO RESULTADO FINAL ---
     if st.session_state.teste_finalizado and st.session_state.resultado_atual:
         resultado = st.session_state.resultado_atual
         
         st.success("🎉 **Diagnóstico Concluído!**")
         
-        # Design inspirado no exemplo solicitado
         st.markdown("### Seu Perfil")
         st.markdown(f"**Perfil predominante:**\n<br>{resultado.get('perfil', 'Não definido')}", unsafe_allow_html=True)
         st.markdown("---")
@@ -214,7 +210,15 @@ Obrigatório: Retorne EXATAMENTE um objeto JSON válido, sem formatação markdo
 # ROTA 2: RANKING E ESTATÍSTICAS
 # ==========================================
 elif rota == "📊 Ranking de Profissões":
-    st.title("📊 Estatísticas Globais")
+    
+    # 1. Criação de um layout superior com o título e a chave (Toggle) do Datashow
+    col_titulo, col_toggle = st.columns([3, 1])
+    with col_titulo:
+        st.title("📊 Estatísticas Globais")
+    with col_toggle:
+        st.write("") # Espaçamento
+        # Toggle para ativar/desativar o recarregamento automático
+        modo_datashow = st.toggle("📺 Modo Datashow (Tempo Real)", value=True)
     
     dados = carregar_estatisticas()
     total = dados.get("total_testes", 0)
@@ -228,14 +232,19 @@ elif rota == "📊 Ranking de Profissões":
     else:
         st.subheader("🏆 Profissões Mais Recomendadas")
         
-        # Ordena o dicionário de profissões (maior para menor)
         ranking = sorted(profissoes.items(), key=lambda x: x[1], reverse=True)
         
         for i, (prof, qtd) in enumerate(ranking):
             col1, col2 = st.columns([3, 1])
             with col1:
-                # Calcula a barra de progresso (limita em 1.0 = 100%)
                 porcentagem = min(qtd / total, 1.0)
                 st.progress(porcentagem, text=f"{i+1}º Lugar: {prof}")
             with col2:
                 st.write(f"**{qtd}** recomendações")
+
+    # 2. Lógica de Atualização Automática
+    if modo_datashow:
+        # Pausa de 3 segundos antes de atualizar (ótimo tempo para ler e não sobrecarregar)
+        time.sleep(3)
+        # Força o Streamlit a recarregar apenas essa aba
+        st.rerun()
