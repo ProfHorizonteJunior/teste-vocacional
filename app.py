@@ -15,6 +15,7 @@ st.set_page_config(page_title="Teste Vocacional", page_icon="🎓", layout="wide
 # LISTA DE PERGUNTAS DO TESTE
 # ==========================================
 PERGUNTAS = [
+    "O que você gosta de fazer? ",
     "Você prefere criar ou organizar?",
     "Gosta de resolver problemas?",
     "Prefere trabalhar com pessoas ou computadores?",
