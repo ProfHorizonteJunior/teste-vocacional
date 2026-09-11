@@ -70,18 +70,9 @@ if "chat" not in st.session_state:
     st.session_state.chat = inicializar_chat()
 
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-    
-    # --- GATILHO INICIAL ---
-    # Faz a IA começar falando antes do usuário digitar algo
-    with st.spinner("Chamando o orientador vocacional..."):
-        try:
-            resposta_inicial = st.session_state.chat.send_message(
-                "Olá, estou pronto para começar meu teste vocacional. Apresente-se brevemente e faça a sua primeira pergunta."
-            )
-            st.session_state.messages.append({"role": "assistant", "content": resposta_inicial.text})
-        except Exception:
-            pass
+    # Mensagem de boas-vindas fixa: mais rápido e sem consumir a API na primeira tela
+    mensagem_boas_vindas = "Seja bem vindo, vamos iniciar o seu teste? Diga-me, o que você gosta de fazer?"
+    st.session_state.messages = [{"role": "assistant", "content": mensagem_boas_vindas}]
 
 if "teste_finalizado" not in st.session_state:
     st.session_state.teste_finalizado = False
@@ -174,14 +165,9 @@ if rota == "📝 Teste Vocacional":
         if st.button("🔄 Iniciar Novo Teste (Próximo Usuário)"):
             st.session_state.chat = inicializar_chat()
             
-            # Repete o gatilho inicial
-            try:
-                resposta_inicial = st.session_state.chat.send_message(
-                    "Olá, estou pronto para começar meu teste vocacional. Apresente-se brevemente e faça a sua primeira pergunta."
-                )
-                st.session_state.messages = [{"role": "assistant", "content": resposta_inicial.text}]
-            except Exception:
-                st.session_state.messages = []
+            # Define a mesma mensagem fixa ao reiniciar
+            mensagem_boas_vindas = "Seja bem vindo, vamos iniciar o seu teste? Diga-me, o que você gosta de fazer?"
+            st.session_state.messages = [{"role": "assistant", "content": mensagem_boas_vindas}]
                 
             st.session_state.teste_finalizado = False
             st.session_state.resultado_atual = None
