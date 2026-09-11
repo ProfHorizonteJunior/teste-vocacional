@@ -4,12 +4,26 @@ import re
 import streamlit as st
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
 
 # Carrega as variáveis de ambiente
 load_dotenv()
 
-st.set_page_config(page_title="Teste Vocacional IA", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="Teste Vocacional", page_icon="🎓", layout="wide")
+
+# ==========================================
+# LISTA DE PERGUNTAS DO TESTE
+# ==========================================
+PERGUNTAS = [
+    "Você prefere criar ou organizar?",
+    "Gosta de resolver problemas?",
+    "Prefere trabalhar com pessoas ou computadores?",
+    "Você gosta de liderar?",
+    "Trabalha melhor sozinho ou em equipe?",
+    "Você gosta de números?",
+    "Gosta de tecnologia?",
+    "Você se considera criativo?",
+    "O que faria se tivesse um dia livre?"
+]
 
 # ==========================================
 # GERENCIAMENTO DE DADOS (JSON)
@@ -27,7 +41,6 @@ def salvar_resultado(profissoes_recomendadas):
     dados["total_testes"] += 1
     
     for prof in profissoes_recomendadas:
-        # Padroniza o nome (ex: "engenheiro de software" -> "Engenheiro De Software")
         prof = str(prof).strip().title()
         dados["profissoes"][prof] = dados["profissoes"].get(prof, 0) + 1
         
@@ -44,38 +57,26 @@ if not api_key:
 
 MODELO = "gemini-3.1-flash-lite"
 
-# Salva o cliente na sessão para não perder a conexão (Evita o erro "client has been closed")
 if "client" not in st.session_state:
     st.session_state.client = genai.Client(api_key=api_key)
-
-def inicializar_chat():
-    instrucao = (
-        "Você é um orientador vocacional experiente e empático. "
-        "Sua missão é ajudar o usuário a descobrir sua profissão ideal. "
-        "Faça uma pergunta por vez sobre os interesses, habilidades, matérias favoritas e "
-        "ambientes de trabalho preferidos do usuário. Não faça todas as perguntas de uma vez. "
-        "Após cerca de 4 a 5 interações (quando tiver dados suficientes), "
-        "dê o seu diagnóstico sugerindo as 3 profissões que mais combinam com ele e explique o porquê."
-    )
-    # Usa o cliente persistido na sessão para criar o chat
-    return st.session_state.client.chats.create(
-        model=MODELO,
-        config=types.GenerateContentConfig(system_instruction=instrucao)
-    )
 
 # ==========================================
 # INICIALIZAÇÃO DE VARIÁVEIS DE SESSÃO
 # ==========================================
-if "chat" not in st.session_state:
-    st.session_state.chat = inicializar_chat()
+if "pergunta_atual" not in st.session_state:
+    st.session_state.pergunta_atual = 0
+
+if "historico_qa" not in st.session_state:
+    st.session_state.historico_qa = [] # Armazena os pares de Pergunta/Resposta
 
 if "messages" not in st.session_state:
-    # Mensagem de boas-vindas fixa: mais rápido e sem consumir a API na primeira tela
-    mensagem_boas_vindas = "Seja bem vindo, vamos iniciar o seu teste? Diga-me, o que você gosta de fazer?"
-    st.session_state.messages = [{"role": "assistant", "content": mensagem_boas_vindas}]
+    # Mensagem 0 com a saudação e a primeira pergunta
+    msg_boas_vindas = f"Seja bem vindo, vamos iniciar o seu teste? \n\n**1.** {PERGUNTAS[0]}"
+    st.session_state.messages = [{"role": "assistant", "content": msg_boas_vindas}]
 
 if "teste_finalizado" not in st.session_state:
     st.session_state.teste_finalizado = False
+
 if "resultado_atual" not in st.session_state:
     st.session_state.resultado_atual = None
 
@@ -90,87 +91,123 @@ rota = st.sidebar.radio("Ir para:", ["📝 Teste Vocacional", "📊 Ranking de P
 # ==========================================
 if rota == "📝 Teste Vocacional":
     st.title("🎓 Descubra sua Profissão Ideal")
-    st.write("Responda às perguntas do nosso orientador para descobrir quais carreiras combinam com você!")
-
-    # Exibe o histórico de mensagens
+    
+    # Exibe o histórico de mensagens da tela
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Se o teste ainda não acabou, exibe a caixa de texto
+    # --- FLUXO DE PERGUNTAS ---
     if not st.session_state.teste_finalizado:
         if user_input := st.chat_input("Digite sua resposta..."):
             
-            # Exibe mensagem do usuário
+            # 1. Mostra e salva a resposta do usuário
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
+                
+            # 2. Registra o par Pergunta/Resposta para enviar à IA depois
+            st.session_state.historico_qa.append({
+                "pergunta": PERGUNTAS[st.session_state.pergunta_atual],
+                "resposta": user_input
+            })
+            
+            # 3. Avança para a próxima pergunta
+            st.session_state.pergunta_atual += 1
+            
+            # Se ainda houver perguntas, faz a próxima
+            if st.session_state.pergunta_atual < len(PERGUNTAS):
+                prox_pergunta = PERGUNTAS[st.session_state.pergunta_atual]
+                txt_prox = f"**{st.session_state.pergunta_atual + 1}.** {prox_pergunta}"
+                
+                st.session_state.messages.append({"role": "assistant", "content": txt_prox})
+                with st.chat_message("assistant"):
+                    st.markdown(txt_prox)
+                st.rerun()
+                
+            # Se as perguntas acabaram, encerra o teste e chama a IA
+            else:
+                st.session_state.teste_finalizado = True
+                st.rerun()
 
-            # Exibe resposta do assistente (Em Streaming)
-            with st.chat_message("assistant"):
+    # --- GERAÇÃO DO DIAGNÓSTICO (APENAS QUANDO FINALIZADO E AINDA SEM RESULTADO) ---
+    if st.session_state.teste_finalizado and st.session_state.resultado_atual is None:
+        with st.chat_message("assistant"):
+            with st.spinner("Analisando suas respostas para diagnosticar o seu perfil..."):
+                
+                # Prepara o histórico para o prompt
+                texto_entrevista = ""
+                for qa in st.session_state.historico_qa:
+                    texto_entrevista += f"Pergunta: {qa['pergunta']}\nResposta do Aluno: {qa['resposta']}\n\n"
+                
+                prompt_diagnostico = f"""Você é um orientador vocacional especialista em diagnosticar perfis profissionais.
+O estudante respondeu ao seguinte questionário:
+
+{texto_entrevista}
+
+Com base nestas respostas, trace o perfil predominante, liste 5 competências principais do aluno e recomende um rank de 5 profissões indicadas.
+
+Obrigatório: Retorne EXATAMENTE um objeto JSON válido, sem formatação markdown (sem ```json), com a seguinte estrutura estrita:
+{{
+    "perfil": "Nome do Perfil 1 + Nome do Perfil 2",
+    "competencias": ["Competência 1", "Competência 2", "Competência 3", "Competência 4", "Competência 5"],
+    "profissoes": ["Profissão 1", "Profissão 2", "Profissão 3", "Profissão 4", "Profissão 5"]
+}}
+"""
                 try:
-                    response_stream = st.session_state.chat.send_message_stream(user_input)
-                    
-                    def gerar_texto(stream):
-                        for chunk in stream:
-                            if chunk.text:
-                                yield chunk.text
-                    
-                    texto_completo = st.write_stream(gerar_texto(response_stream))
-                    st.session_state.messages.append({"role": "assistant", "content": texto_completo})
-                except Exception as e:
-                    st.error(f"Erro: {e}")
-        
-        st.divider()
-        
-        # Botão para finalizar o teste
-        if len(st.session_state.messages) > 2:
-            if st.button("✅ Encerrar Teste e Ver Meu Resultado", type="primary", use_container_width=True):
-                with st.spinner("Analisando seu perfil e gerando resultado..."):
-                    
-                    # Prompt oculto para extração em JSON
-                    prompt_extracao = (
-                        "Baseado em toda a nossa conversa, liste as 3 profissões que você recomendaria "
-                        "para este usuário. Retorne EXATAMENTE um array JSON válido apenas com os nomes das profissões, "
-                        "sem formatação markdown, sem crases e sem texto adicional. "
-                        "Exemplo: [\"Engenheiro de Software\", \"Designer Gráfico\", \"Psicólogo\"]"
+                    # Envia a requisição única para o Gemini
+                    response = st.session_state.client.models.generate_content(
+                        model=MODELO,
+                        contents=prompt_diagnostico
                     )
                     
-                    try:
-                        resposta_json = st.session_state.chat.send_message(prompt_extracao).text
+                    # Limpa a resposta e converte para JSON
+                    resposta_limpa = re.sub(r'```(?:json)?', '', response.text).strip()
+                    resultado_json = json.loads(resposta_limpa)
+                    
+                    # Salva nas estatísticas as 5 profissões recomendadas
+                    if "profissoes" in resultado_json:
+                        salvar_resultado(resultado_json["profissoes"])
                         
-                        # Limpa possíveis crases de formatação markdown (```json ... ```)
-                        resposta_limpa = re.sub(r'```(?:json)?', '', resposta_json).strip()
-                        
-                        profissoes = json.loads(resposta_limpa)
-                        
-                        if isinstance(profissoes, list):
-                            salvar_resultado(profissoes)
-                            st.session_state.resultado_atual = profissoes
-                            st.session_state.teste_finalizado = True
-                            st.rerun() # Recarrega a tela para mostrar o resultado final
-                    except Exception as e:
-                        st.error(f"Erro ao processar as profissões finais: {e}\nRetorno bruto: {resposta_json}")
+                    st.session_state.resultado_atual = resultado_json
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao processar o diagnóstico: {e}")
 
-    # Se o teste foi finalizado, bloqueia o chat e mostra o resultado
-    else:
-        st.success("🎉 **Teste Concluído!**")
-        st.subheader("Suas Profissões Recomendadas:")
-        for p in st.session_state.resultado_atual:
-            st.markdown(f"- 🌟 **{p}**")
+    # --- EXIBIÇÃO DO RESULTADO FINAL ---
+    if st.session_state.teste_finalizado and st.session_state.resultado_atual:
+        resultado = st.session_state.resultado_atual
+        
+        st.success("🎉 **Diagnóstico Concluído!**")
+        
+        # Design inspirado no exemplo solicitado
+        st.markdown("### Seu Perfil")
+        st.markdown(f"**Perfil predominante:**\n<br>{resultado.get('perfil', 'Não definido')}", unsafe_allow_html=True)
+        st.markdown("---")
+        
+        st.markdown("### Suas principais competências")
+        for comp in resultado.get('competencias', []):
+            st.markdown(f"• {comp}")
+        st.markdown("---")
+        
+        st.markdown("### Profissões indicadas")
+        icones = ["🥇", "🥈", "🥉", "4º", "5º"]
+        profissoes = resultado.get('profissoes', [])
+        
+        for i, prof in enumerate(profissoes[:5]):
+            icone = icones[i] if i < len(icones) else "•"
+            st.markdown(f"**{icone} {prof}**")
             
         st.info("Para ver como você se compara aos outros, acesse o **Ranking** no menu lateral.")
         
-        # Botão para reiniciar para o próximo usuário
-        if st.button("🔄 Iniciar Novo Teste (Próximo Usuário)"):
-            st.session_state.chat = inicializar_chat()
-            
-            # Define a mesma mensagem fixa ao reiniciar
-            mensagem_boas_vindas = "Seja bem vindo, vamos iniciar o seu teste? Diga-me, o que você gosta de fazer?"
-            st.session_state.messages = [{"role": "assistant", "content": mensagem_boas_vindas}]
-                
-            st.session_state.teste_finalizado = False
+        st.divider()
+        if st.button("🔄 Iniciar Novo Teste (Próximo Usuário)", type="primary"):
+            st.session_state.pergunta_atual = 0
+            st.session_state.historico_qa = []
             st.session_state.resultado_atual = None
+            st.session_state.teste_finalizado = False
+            msg_boas_vindas = f"Seja bem vindo, vamos iniciar o seu teste? \n\n**1.** {PERGUNTAS[0]}"
+            st.session_state.messages = [{"role": "assistant", "content": msg_boas_vindas}]
             st.rerun()
 
 # ==========================================
